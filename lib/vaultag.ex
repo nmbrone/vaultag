@@ -55,7 +55,7 @@ defmodule Vaultag do
   def init(:ok) do
     Process.flag(:trap_exit, true)
     t = :ets.new(config(:ets_table_name, @otp_app), config(:ets_table_options, [:set, :private]))
-    send(self(), :auth)
+    send(self(), {:auth, 1})
     {:ok, %{table: t, vault: nil}}
   end
 
@@ -100,7 +100,7 @@ defmodule Vaultag do
   end
 
   @impl true
-  def handle_info(:auth, state) do
+  def handle_info({:auth, attempt}, state) do
     case config(:vault, []) |> Vault.new() |> Vault.auth() do
       {:ok, vault} ->
         Logger.info("authenticated")
@@ -109,14 +109,14 @@ defmodule Vaultag do
 
       # TODO: how should we handle the auth error?
       {:error, reason} ->
-        Logger.error("authentication failed: #{inspect(reason)}, retrying in 5s")
-        Process.send_after(self(), :auth, 5000)
+        Logger.error("authentication failed: #{inspect(reason)}, retrying in #{attempt}s")
+        Process.send_after(self(), {:auth, attempt + 1}, attempt * 1000)
         {:noreply, state}
     end
   end
 
   @impl true
-  def handle_info(:do_token_renewal, state) do
+  def handle_info({:do_token_renewal, attempt}, state) do
     case Vault.request(state.vault, :post, "/auth/token/renew-self") do
       {:ok, %{"auth" => %{"lease_duration" => lease_duration}}} ->
         Logger.info("token renewed")
@@ -126,12 +126,12 @@ defmodule Vaultag do
 
       {:ok, %{"errors" => ["permission denied"]}} ->
         Logger.warn("token renewal failed: token already expired")
-        send(self(), :auth)
+        send(self(), {:auth, 1})
         {:noreply, state}
 
       other ->
-        Logger.error("token renewal failed: #{inspect(other)}")
-        Process.send_after(self(), :schedule_token_renewal, 1000)
+        Logger.error("token renewal failed: #{inspect(other)}, retrying in #{attempt}s")
+        Process.send_after(self(), {:do_token_renewal, attempt + 1}, attempt * 1000)
         {:noreply, state}
     end
   end
@@ -151,7 +151,7 @@ defmodule Vaultag do
       # the threshold cannot be renewed in this way
       delay = Enum.max([delay, config(:token_renew_threshold, 2)])
       Logger.debug("token renewal scheduled in #{delay}s")
-      Process.send_after(self(), :do_token_renewal, delay * 1000)
+      Process.send_after(self(), {:do_token_renewal, 1}, delay * 1000)
     else
       Logger.debug("token renewal disabled")
     end
