@@ -1,1 +1,1 @@
-ExUnit.start(exclude: [:skip], seed: 0, trace: true)
+ExUnit.start(exclude: [:skip], seed: 0)
