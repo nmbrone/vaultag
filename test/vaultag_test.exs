@@ -24,23 +24,23 @@ defmodule VaultagTest do
   describe "read/2" do
     test "reads a value from the vault" do
       value = %{"foo" => "bar"}
-      Vaultag.write("kv/my-secret", value)
       assert {:ok, ^value} = Vaultag.read("kv/my-secret")
       assert {:ok, %{"data" => ^value}} = Vaultag.read("kv/my-secret", full_response: true)
     end
   end
 
   describe "request/3" do
-    test "make an HTTP request" do
-      Vaultag.write("kv/my-secret", %{"foo" => "bar"})
+    test "makes an HTTP request" do
       assert {:ok, %{"data" => %{"foo" => "bar"}}} = Vaultag.request(:get, "kv/my-secret")
     end
   end
 
   describe "delete/2" do
     test "deletes a value from the vault" do
-      assert {:ok, _} = Vaultag.delete("kv/my-secret")
-      assert {:error, ["Key not found"]} == Vaultag.list("kv")
+      path = "kv/foo"
+      Vaultag.write(path, %{foo: "bar"})
+      assert {:ok, _} = Vaultag.delete(path)
+      assert {:error, ["Key not found"]} == Vaultag.read(path)
     end
   end
 

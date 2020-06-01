@@ -50,3 +50,5 @@ vault write rabbitmq/config/lease ttl=3s max_ttl=5s
 
 vault write rabbitmq/roles/admin vhosts='{"/":{"write": ".*", "read": ".*"}}' tags="vault"
 #END SECRETS
+
+vault kv put kv/my-secret foo=bar
