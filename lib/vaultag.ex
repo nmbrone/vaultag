@@ -21,10 +21,11 @@ defmodule Vaultag do
   end
 
   def read(path, opts \\ []) do
-    case Keyword.pop(opts, :cache) do
-      {true, opts} -> GenServer.call(__MODULE__, {:cache, path, opts})
-      {_not, opts} -> GenServer.call(__MODULE__, {:read, path, opts})
-    end
+    GenServer.call(__MODULE__, {:read, path, opts})
+  end
+
+  def read_dynamic(path, opts \\ []) do
+    GenServer.call(__MODULE__, {:read_dynamic, path, opts})
   end
 
   def list(path, opts \\ []) do
@@ -60,13 +61,43 @@ defmodule Vaultag do
   end
 
   @impl true
-  def handle_call({:cache, path, opts}, _, state) do
-    {:reply, get_cache_or_read(state, path, opts), state}
+  def handle_call({:read, path, opts}, _, state) do
+    {:reply, Vault.read(state.vault, path, opts), state}
   end
 
   @impl true
-  def handle_call({:read, path, opts}, _, state) do
-    {:reply, Vault.read(state.vault, path, opts), state}
+  def handle_call({:read_dynamic, path, opts}, _, state) do
+    # only the full response will be cached
+    cache_id = cache_key(path, Keyword.drop(opts, [:full_response]))
+    data = get_cache(state.table, cache_id)
+
+    reply =
+      unless is_nil(data) do
+        {:ok, data}
+      else
+        case Vault.read(state.vault, path, Keyword.put(opts, :full_response, true)) do
+          {:ok, data} = resp ->
+            put_cache(state.table, cache_id, data)
+            maybe_schedule_lease_renewal(data, cache_id)
+            resp
+
+          resp ->
+            resp
+        end
+      end
+      |> case do
+        {:ok, data} ->
+          if Keyword.get(opts, :full_response, false) do
+            {:ok, data}
+          else
+            {:ok, data["data"]}
+          end
+
+        other ->
+          other
+      end
+
+    {:reply, reply, state}
   end
 
   @impl true
@@ -107,7 +138,6 @@ defmodule Vaultag do
         maybe_schedule_token_renewal(vault)
         {:noreply, %{state | vault: vault}}
 
-      # TODO: how should we handle the auth error?
       {:error, reason} ->
         Logger.error("authentication failed: #{inspect(reason)}, retrying in #{attempt}s")
         Process.send_after(self(), {:auth, attempt + 1}, attempt * 1000)
@@ -116,24 +146,53 @@ defmodule Vaultag do
   end
 
   @impl true
-  def handle_info({:do_token_renewal, attempt}, state) do
+  def handle_info({:renew_token, attempt}, state) do
     case Vault.request(state.vault, :post, "/auth/token/renew-self") do
-      {:ok, %{"auth" => %{"lease_duration" => lease_duration}}} ->
+      {:ok, %{"auth" => %{"lease_duration" => lease_duration}, "warnings" => warnings}} ->
         Logger.info("token renewed")
+        unless is_nil(warnings), do: Logger.warn("token renewal: #{inspect(warnings)}")
         vault = put_token_expires_at(state.vault, lease_duration)
         maybe_schedule_token_renewal(vault)
         {:noreply, %{state | vault: vault}}
 
-      {:ok, %{"errors" => ["permission denied"]}} ->
-        Logger.warn("token renewal failed: token already expired")
+      {:ok, %{"errors" => errors}} ->
+        Logger.warn("token renewal failed: #{inspect(errors)}, re-authenticating...")
         send(self(), {:auth, 1})
         {:noreply, state}
 
-      other ->
-        Logger.error("token renewal failed: #{inspect(other)}, retrying in #{attempt}s")
-        Process.send_after(self(), {:do_token_renewal, attempt + 1}, attempt * 1000)
+      request_error ->
+        Logger.error("token renewal failed: #{inspect(request_error)}, retrying in #{attempt}s")
+        Process.send_after(self(), {:renew_token, attempt + 1}, attempt * 1000)
         {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_info({:renew_lease, lease_id, cache_id, attempt}, state) do
+    case Vault.request(state.vault, :put, "/sys/leases/renew", body: %{lease_id: lease_id}) do
+      {:ok, %{"lease_id" => ^lease_id} = data} ->
+        # update cached data
+        case get_cache(state.table, cache_id) do
+          nil -> false
+          map -> put_cache(state.table, cache_id, Map.put(data, "data", Map.fetch!(map, "data")))
+        end
+
+        maybe_schedule_lease_renewal(data, cache_id)
+        Logger.info("lease ID #{inspect(lease_id)} renewed")
+
+      {:ok, %{"errors" => errors}} ->
+        Logger.warn("lease ID #{inspect(lease_id)} failed to renew: #{inspect(errors)}")
+
+      request_error ->
+        Logger.error(
+          "lease ID #{inspect(lease_id)} failed to renew: " <>
+            "#{inspect(request_error)}, retrying in #{attempt}s"
+        )
+
+        Process.send_after(self(), {:renew_lease, lease_id, cache_id, attempt + 1}, attempt * 1000)
+    end
+
+    {:noreply, state}
   end
 
   @impl true
@@ -151,25 +210,65 @@ defmodule Vaultag do
       # the threshold cannot be renewed in this way
       delay = Enum.max([delay, config(:token_renew_threshold, 2)])
       Logger.debug("token renewal scheduled in #{delay}s")
-      Process.send_after(self(), {:do_token_renewal, 1}, delay * 1000)
+      Process.send_after(self(), {:renew_token, 1}, delay * 1000)
     else
       Logger.debug("token renewal disabled")
     end
   end
 
-  defp get_cache_or_read(state, path, opts) do
-    key = {path, opts}
+  defp maybe_schedule_lease_renewal(
+         %{
+           "renewable" => true,
+           "lease_id" => lease_id,
+           "lease_duration" => lease_duration,
+           "warnings" => warnings
+         },
+         cache_id
+       ) do
+    delay = lease_duration - config(:lease_renew_time_shift, 60)
+    # the threshold here is used to avoid sending too many requests to the server when the lease
+    # is about to reach its `max_ttl` which also means the leases with `ttl` less than
+    # the threshold cannot be renewed in this way
+    delay = Enum.max([delay, config(:lease_renew_threshold, 2)])
+    Logger.debug("lease ID #{inspect(lease_id)} renewal scheduled in #{delay}s")
 
-    case :ets.lookup(state.table, key) do
-      [{_key, res}] ->
-        res
+    unless is_nil(warnings),
+      do: Logger.warn("lease ID #{inspect(lease_id)} renewal: #{inspect(warnings)}")
 
+    Process.send_after(self(), {:renew_lease, lease_id, cache_id, 1}, delay * 1000)
+  end
+
+  defp maybe_schedule_lease_renewal(%{"lease_id" => lease_id}, _cache_id) do
+    Logger.debug("not renewable lease ID #{inspect(lease_id)}")
+  end
+
+  defp put_cache(table, key, %{"lease_duration" => ttl} = data) do
+    put_cache(table, key, data, ttl)
+  end
+
+  defp put_cache(table, key, data, ttl) do
+    expires_at = NaiveDateTime.add(NaiveDateTime.utc_now(), ttl, :second)
+    :ets.insert(table, {key, data, expires_at})
+  end
+
+  defp get_cache(table, key) do
+    with [{^key, data, expires_at}] <- :ets.lookup(table, key),
+         :gt <- NaiveDateTime.compare(expires_at, NaiveDateTime.utc_now()) do
+      data
+    else
+      # not in the cache
       [] ->
-        res = Vault.read(state.vault, path, opts)
-        # cache only success responses
-        if match?({:ok, _}, res), do: :ets.insert(state.table, {key, res})
-        res
+        nil
+
+      # expired
+      _ ->
+        :ets.delete(table, key)
+        nil
     end
+  end
+
+  defp cache_key(path, opts) do
+    :crypto.hash(:md5, inspect({path, opts})) |> Base.encode16()
   end
 
   defp put_token_expires_at(vault, ttl) do

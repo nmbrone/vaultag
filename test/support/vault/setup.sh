@@ -9,8 +9,8 @@ vault auth enable userpass
 vault write auth/userpass/users/admin \
   password="admin" \
   token_policies="default,admin" \
-  token_ttl=5s \
-  token_max_ttl=30s
+  token_ttl=3s \
+  token_max_ttl=8s
 
 vault auth enable approle
 vault write auth/approle/role/admin \
@@ -46,7 +46,7 @@ vault write rabbitmq/config/connection \
   password="guest" \
   verify_connection=true
 
-vault write rabbitmq/config/lease ttl=20s max_ttl=60s
+vault write rabbitmq/config/lease ttl=3s max_ttl=5s
 
 vault write rabbitmq/roles/admin vhosts='{"/":{"write": ".*", "read": ".*"}}' tags="vault"
 #END SECRETS
