@@ -8,6 +8,6 @@ docker run --rm -d \
   --cap-add=IPC_LOCK \
   vault
 
-sleep 3s
+sleep 5s
 docker exec dev-vault cp /home/vault/.vault-token /root/.vault-token
 docker exec dev-vault sh /vault/setup/setup.sh
