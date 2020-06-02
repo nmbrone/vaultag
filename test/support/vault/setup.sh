@@ -41,7 +41,7 @@ vault write database/roles/admin \
 vault secrets enable rabbitmq
 
 vault write rabbitmq/config/connection \
-  connection_uri="http://localhost:15672" \
+  connection_uri="http://localhost:5672" \
   username="guest" \
   password="guest" \
   verify_connection=true
