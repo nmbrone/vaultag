@@ -3,6 +3,17 @@ on: push
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+
+    services:
+      rabbitmq:
+        image: rabbitmq
+        ports: ['5672:5672']
+        env:
+          RABBITMQ_USER: guest
+          RABBITMQ_PASS: guest
+          RABBITMQ_VHOST: "/"
 
     steps:
       - uses: actions/checkout@v2
