@@ -12,8 +12,11 @@ defmodule Vaultag do
     * `token_renew_time_shift` - a time in seconds;
   """
   use GenServer
+
   alias Vaultag.{Logger, Cache}
+
   import Vaultag.Config
+  import Ms
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, :ok, Keyword.put_new(opts, :name, __MODULE__))
@@ -21,10 +24,6 @@ defmodule Vaultag do
 
   def read(path, opts \\ []) do
     GenServer.call(__MODULE__, {:read, path, opts})
-  end
-
-  def read_dynamic(path, opts \\ []) do
-    GenServer.call(__MODULE__, {:read_dynamic, path, opts})
   end
 
   def list(path, opts \\ []) do
@@ -54,42 +53,31 @@ defmodule Vaultag do
   @impl true
   def init(:ok) do
     Process.flag(:trap_exit, true)
+    :timer.send_interval(config(:cache_cleanup_interval, ms({1, :hour})), self(), :cleanup_cache)
     send(self(), {:auth, 1})
     {:ok, %{table: Cache.init(), vault: nil}}
   end
 
   @impl true
   def handle_call({:read, path, opts}, _, state) do
-    {:reply, Vault.read(state.vault, path, opts), state}
-  end
-
-  @impl true
-  def handle_call({:read_dynamic, path, opts}, _, state) do
     # we always gonna put full responses into the cache
     key = Cache.key_for_request(path, Keyword.drop(opts, [:full_response]))
 
-    # TODO: refactor
     response =
-      case Cache.get(state.table, key) do
-        nil ->
-          case Vault.read(state.vault, path, Keyword.put(opts, :full_response, true)) do
-            {:ok, data} ->
-              Cache.put(state.table, key, data)
-              maybe_schedule_lease_renewal(data)
-              {:ok, data}
-
-            resp ->
-              resp
-          end
-
-        cached ->
-          {:ok, cached}
+      with {:cache, nil} <- {:cache, Cache.get(state.table, key)},
+           {:ok, data} <- Vault.read(state.vault, path, Keyword.put(opts, :full_response, true)) do
+        Cache.put(state.table, key, data)
+        maybe_schedule_lease_renewal(data)
+        {:ok, data}
+      else
+        {:cache, data} -> {:ok, data}
+        resp -> resp
       end
 
     reply =
       case {response, Keyword.get(opts, :full_response, false)} do
+        {{:ok, data}, false} -> {:ok, Map.fetch!(data, "data")}
         {{:ok, data}, true} -> {:ok, data}
-        {{:ok, %{"data" => data}}, false} -> {:ok, data}
         _ -> response
       end
 
@@ -167,7 +155,6 @@ defmodule Vaultag do
   def handle_info({:renew_lease, lease_id, attempt}, state) do
     case Vault.request(state.vault, :put, "/sys/leases/renew", body: %{lease_id: lease_id}) do
       {:ok, %{"lease_id" => ^lease_id} = data} ->
-        # update cached data
         Cache.update(state.table, data)
         maybe_schedule_lease_renewal(data)
         Logger.info("lease ID #{inspect(lease_id)} renewed")
@@ -184,6 +171,12 @@ defmodule Vaultag do
         Process.send_after(self(), {:renew_lease, lease_id, attempt + 1}, attempt * 1000)
     end
 
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:cleanup_cache, state) do
+    Cache.cleanup(state.table)
     {:noreply, state}
   end
 
@@ -227,9 +220,7 @@ defmodule Vaultag do
     Process.send_after(self(), {:renew_lease, lease_id, 1}, delay * 1000)
   end
 
-  defp maybe_schedule_lease_renewal(%{"lease_id" => lease_id}) do
-    Logger.debug("not renewable lease ID #{inspect(lease_id)}")
-  end
+  defp maybe_schedule_lease_renewal(_), do: :ok
 
   defp put_token_expires_at(vault, ttl) do
     # https://github.com/matthewoden/libvault/blob/360eb7b2a19fda665c4e05a0aead1f52d3be80fd/lib/vault.ex#L368

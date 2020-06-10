@@ -13,23 +13,18 @@ defmodule Vaultag.Cache do
   end
 
   def put(table, key, data, ttl) do
-    expires_at = NaiveDateTime.add(NaiveDateTime.utc_now(), ttl, :second)
-    :ets.insert(table, {key, data, expires_at})
+    :ets.insert(table, {key, data, timestamp(ttl)})
   end
 
   def get(table, key) do
-    with [{^key, data, expires_at}] <- :ets.lookup(table, key),
-         :gt <- NaiveDateTime.compare(expires_at, NaiveDateTime.utc_now()) do
-      data
-    else
-      # not in the cache
-      [] ->
-        nil
+    now = timestamp()
 
+    case :ets.lookup(table, key) do
+      [{^key, data, expires_at}] when expires_at > now -> data
       # expired
-      _ ->
-        :ets.delete(table, key)
-        nil
+      [{_, _, _}] -> nil
+      # not in the cache
+      [] -> nil
     end
   end
 
@@ -50,7 +45,20 @@ defmodule Vaultag.Cache do
     nil
   end
 
+  def cleanup(table) do
+    now = timestamp()
+    :ets.select_delete(table, [{{:_, :_, :"$1"}, [{:>, now, :"$1"}], [true]}])
+  end
+
   def key_for_request(path, opts) do
     :crypto.hash(:md5, inspect({path, opts})) |> Base.encode16()
+  end
+
+  defp timestamp() do
+    DateTime.utc_now() |> DateTime.to_unix(:second)
+  end
+
+  defp timestamp(diff) do
+    DateTime.utc_now() |> DateTime.add(diff, :second) |> DateTime.to_unix(:second)
   end
 end

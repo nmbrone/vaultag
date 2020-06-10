@@ -27,6 +27,33 @@ defmodule VaultagTest do
       assert {:ok, ^value} = Vaultag.read("kv/my-secret")
       assert {:ok, %{"data" => ^value}} = Vaultag.read("kv/my-secret", full_response: true)
     end
+
+    test "caches the dynamic secret for a time of its lease duration" do
+      {:ok, resp} = Vaultag.read("rabbitmq/creds/admin")
+
+      assert {:ok, ^resp} = Vaultag.read("rabbitmq/creds/admin")
+
+      assert {:ok, %{"data" => ^resp}} = Vaultag.read("rabbitmq/creds/admin", full_response: true)
+    end
+
+    test "renews the lease when it is possible" do
+      {:ok, resp1} = Vaultag.read("rabbitmq/creds/admin", full_response: true)
+      # lease ttl is 3s, see setup.sh
+      Process.sleep(3500)
+      {:ok, resp2} = Vaultag.read("rabbitmq/creds/admin", full_response: true)
+      assert resp2["data"] == resp1["data"]
+      assert resp2["lease_id"] == resp1["lease_id"]
+      assert resp2["request_id"] != resp1["request_id"]
+    end
+
+    test "invalidates the expired cached value" do
+      {:ok, resp1} = Vaultag.read("rabbitmq/creds/admin")
+      # lease max_ttl is 5s, see setup.sh
+      Process.sleep(5500)
+      {:ok, resp2} = Vaultag.read("rabbitmq/creds/admin")
+      assert resp2 != resp1
+      assert {:ok, ^resp2} = Vaultag.read("rabbitmq/creds/admin")
+    end
   end
 
   describe "request/3" do
@@ -41,36 +68,6 @@ defmodule VaultagTest do
       Vaultag.write(path, %{foo: "bar"})
       assert {:ok, _} = Vaultag.delete(path)
       assert {:error, ["Key not found"]} == Vaultag.read(path)
-    end
-  end
-
-  describe "read_dynamic/2" do
-    test "caches the dynamic secret for a time of its lease duration" do
-      {:ok, resp} = Vaultag.read_dynamic("rabbitmq/creds/admin")
-
-      assert {:ok, ^resp} = Vaultag.read_dynamic("rabbitmq/creds/admin")
-
-      assert {:ok, %{"data" => ^resp}} =
-               Vaultag.read_dynamic("rabbitmq/creds/admin", full_response: true)
-    end
-
-    test "renews the lease when it is possible" do
-      {:ok, resp1} = Vaultag.read_dynamic("rabbitmq/creds/admin", full_response: true)
-      # lease ttl is 3s, see setup.sh
-      Process.sleep(3500)
-      {:ok, resp2} = Vaultag.read_dynamic("rabbitmq/creds/admin", full_response: true)
-      assert resp2["data"] == resp1["data"]
-      assert resp2["lease_id"] == resp1["lease_id"]
-      assert resp2["request_id"] != resp1["request_id"]
-    end
-
-    test "invalidates the expired cached value" do
-      {:ok, resp1} = Vaultag.read_dynamic("rabbitmq/creds/admin")
-      # lease max_ttl is 5s, see setup.sh
-      Process.sleep(5500)
-      {:ok, resp2} = Vaultag.read_dynamic("rabbitmq/creds/admin")
-      assert resp2 != resp1
-      assert {:ok, ^resp2} = Vaultag.read_dynamic("rabbitmq/creds/admin")
     end
   end
 

@@ -23,7 +23,8 @@ defmodule Vaultag.MixProject do
     [
       {:jason, "~> 1.2"},
       {:libvault, "~> 0.2.2"},
-      {:tesla, "~> 1.3"}
+      {:tesla, "~> 1.3"},
+      {:ms, github: "nmbrone/ms", branch: "master"}
     ]
   end
 end
