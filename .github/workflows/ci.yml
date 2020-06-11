@@ -8,18 +8,16 @@ jobs:
 
     services:
       rabbitmq:
-        image: rabbitmq
-        ports: ['5672:5672', '15672:15672']
-        env:
-          RABBITMQ_USER: guest
-          RABBITMQ_PASS: guest
-          RABBITMQ_VHOST: "/"
+        image: rabbitmq:3-management-alpine
+        ports:
+          - 15672/tcp
+        options: --health-cmd "rabbitmqctl node_health_check" --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-elixir@v1
         with:
-          otp-version: 22.2
+          otp-version: 23.0
           elixir-version: 1.10.3
       - uses: actions/cache@v1
         with:
@@ -39,6 +37,8 @@ jobs:
           mix local.hex --force
           mix deps.get
       - name: Setup Vault
-        run: sh test/support/vault/docker.sh
+        run: sh ./test/support/vault/docker.sh
+        env:
+          RABBITMQ_URL: http://localhost:${{ job.services.rabbitmq.ports['15672'] }}
       - name: Run Tests
         run: mix test
