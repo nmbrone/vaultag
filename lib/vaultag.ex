@@ -8,15 +8,23 @@ defmodule Vaultag do
 
     * `vault` - `libvault` options;
     * `ets_table_options` - options for ETS table;
-    * `token_renew` - a boolean which indicates whether to use the token renewal;
     * `token_renew_time_shift` - a time in seconds;
+
+    * `:vault` - `libvault` configuration. See the options for `Vault.new/1`;
+    * `:cache_cleanup_interval` - an interval in seconds after which the cache has to be cleaned up
+      from the outdated entries. Defaults to `3600`;
+    * `:token_renew` - a boolean which indicates whether to use the token renewal functionality.
+      Defaults to `true`;
+    * `:token_renew_time_shift` - Defaults to `60` seconds;
+    * `:token_renew_threshold` - Defaults to `2` seconds;
+    * `:lease_renew_time_shift` - Defaults to `60` seconds;
+    * `:lease_renew_threshold` - Defaults to `2` seconds;
   """
   use GenServer
 
   alias Vaultag.{Logger, Cache}
 
   import Vaultag.Config
-  import Ms
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, :ok, Keyword.put_new(opts, :name, __MODULE__))
@@ -53,7 +61,7 @@ defmodule Vaultag do
   @impl true
   def init(:ok) do
     Process.flag(:trap_exit, true)
-    :timer.send_interval(config(:cache_cleanup_interval, ms({1, :hour})), self(), :cleanup_cache)
+    :timer.send_interval(config(:cache_cleanup_interval, 3600) * 1000, self(), :cleanup_cache)
     send(self(), {:auth, 1})
     {:ok, %{table: Cache.init(), vault: nil}}
   end
@@ -176,7 +184,8 @@ defmodule Vaultag do
 
   @impl true
   def handle_info(:cleanup_cache, state) do
-    Cache.cleanup(state.table)
+    count = Cache.cleanup(state.table)
+    Logger.debug("cache cleanup: #{count} entries removed")
     {:noreply, state}
   end
 
