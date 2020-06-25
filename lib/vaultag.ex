@@ -65,7 +65,7 @@ defmodule Vaultag do
       Process.flag(:trap_exit, true)
       :timer.send_interval(config(:cache_cleanup_interval, 3600) * 1000, self(), :cleanup_cache)
       send(self(), {:auth, 1})
-      {:ok, %{table: Cache.init(), vault: nil}}
+      {:ok, %{table: Cache.init(), vault: Vault.new([])}}
     end
   end
 
@@ -233,6 +233,7 @@ defmodule Vaultag do
     shift = config(:lease_renewal_time_shift, 60)
     delay = lease_duration - shift
 
+    # FIXME: the lease with the duration less than 2 x :lease_renewal_time_shift cannot be renewed
     if delay > shift do
       Logger.debug("lease ID #{inspect(lease_id)} renewal scheduled in #{delay}s")
 
