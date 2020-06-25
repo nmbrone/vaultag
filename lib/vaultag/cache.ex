@@ -50,6 +50,10 @@ defmodule Vaultag.Cache do
     :ets.select_delete(table, [{{:_, :_, :"$1"}, [{:>, now, :"$1"}], [true]}])
   end
 
+  def reset(table) do
+    :ets.delete_all_objects(table)
+  end
+
   def key_for_request(path, opts) do
     :crypto.hash(:md5, inspect({path, opts})) |> Base.encode16()
   end

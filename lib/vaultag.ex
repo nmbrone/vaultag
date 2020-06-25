@@ -8,17 +8,15 @@ defmodule Vaultag do
 
     * `vault` - `libvault` options;
     * `ets_table_options` - options for ETS table;
-    * `token_renew_time_shift` - a time in seconds;
+    * `token_renewal_time_shift` - a time in seconds;
 
     * `:vault` - `libvault` configuration. See the options for `Vault.new/1`;
     * `:cache_cleanup_interval` - an interval in seconds after which the cache has to be cleaned up
       from the outdated entries. Defaults to `3600`;
     * `:token_renew` - a boolean which indicates whether to use the token renewal functionality.
       Defaults to `true`;
-    * `:token_renew_time_shift` - Defaults to `60` seconds;
-    * `:token_renew_threshold` - Defaults to `2` seconds;
-    * `:lease_renew_time_shift` - Defaults to `60` seconds;
-    * `:lease_renew_threshold` - Defaults to `2` seconds;
+    * `:token_renewal_time_shift` - Defaults to `60` seconds;
+    * `:lease_renewal_time_shift` - Defaults to `60` seconds;
   """
   use GenServer
 
@@ -31,39 +29,44 @@ defmodule Vaultag do
   end
 
   def read(path, opts \\ []) do
-    GenServer.call(__MODULE__, {:read, path, opts})
+    maybe_call({:read, path, opts})
   end
 
   def list(path, opts \\ []) do
-    GenServer.call(__MODULE__, {:list, path, opts})
+    maybe_call({:list, path, opts})
   end
 
   def write(path, value, opts \\ []) do
-    GenServer.call(__MODULE__, {:write, path, value, opts})
+    maybe_call({:write, path, value, opts})
   end
 
   def delete(path, opts \\ []) do
-    GenServer.call(__MODULE__, {:delete, path, opts})
+    maybe_call({:delete, path, opts})
   end
 
   def request(method, path, opts \\ []) do
-    GenServer.call(__MODULE__, {:request, method, path, opts})
+    maybe_call({:request, method, path, opts})
   end
 
   def get_client do
-    GenServer.call(__MODULE__, :get_client)
+    maybe_call(:get_client)
   end
 
   def set_client(vault) do
-    GenServer.call(__MODULE__, {:set_client, vault})
+    maybe_call({:set_client, vault})
   end
 
   @impl true
   def init(:ok) do
-    Process.flag(:trap_exit, true)
-    :timer.send_interval(config(:cache_cleanup_interval, 3600) * 1000, self(), :cleanup_cache)
-    send(self(), {:auth, 1})
-    {:ok, %{table: Cache.init(), vault: nil}}
+    if is_nil(config(:vault)) do
+      Logger.info("not configured")
+      :ignore
+    else
+      Process.flag(:trap_exit, true)
+      :timer.send_interval(config(:cache_cleanup_interval, 3600) * 1000, self(), :cleanup_cache)
+      send(self(), {:auth, 1})
+      {:ok, %{table: Cache.init(), vault: nil}}
+    end
   end
 
   @impl true
@@ -128,6 +131,7 @@ defmodule Vaultag do
       {:ok, vault} ->
         Logger.info("authenticated")
         maybe_schedule_token_renewal(vault)
+        Cache.reset(state.table)
         {:noreply, %{state | vault: vault}}
 
       {:error, reason} ->
@@ -148,8 +152,7 @@ defmodule Vaultag do
         {:noreply, %{state | vault: vault}}
 
       {:ok, %{"errors" => errors}} ->
-        Logger.warn("token renewal failed: #{inspect(errors)}, re-authenticating...")
-        send(self(), {:auth, 1})
+        Logger.warn("token renewal failed: #{inspect(errors)}")
         {:noreply, state}
 
       request_error ->
@@ -195,16 +198,27 @@ defmodule Vaultag do
     :ok
   end
 
+  defp maybe_call(message) do
+    case GenServer.whereis(__MODULE__) do
+      nil -> {:error, :disabled}
+      pid -> GenServer.call(pid, message)
+    end
+  end
+
   defp maybe_schedule_token_renewal(vault) do
-    if config(:token_renew, true) do
+    if config(:token_renewal, true) do
       ttl = NaiveDateTime.diff(vault.token_expires_at, NaiveDateTime.utc_now())
-      delay = ttl - config(:token_renew_time_shift, 60)
-      # the threshold here is used to avoid sending too many requests to the server when the token
-      # is about to reach its `token_max_ttl` which also means the tokens with `token_ttl` less than
-      # the threshold cannot be renewed in this way
-      delay = Enum.max([delay, config(:token_renew_threshold, 2)])
-      Logger.debug("token renewal scheduled in #{delay}s")
-      Process.send_after(self(), {:renew_token, 1}, delay * 1000)
+      shift = config(:token_renewal_time_shift, 60)
+      delay = ttl - shift
+
+      # FIXME: the token with TTL less than 2 x :token_renewal_time_shift cannot be renewed
+      if delay > shift do
+        Logger.debug("token renewal scheduled in #{delay}s")
+        Process.send_after(self(), {:renew_token, 1}, delay * 1000)
+      else
+        Logger.debug("re-authentication scheduled in #{ttl}s")
+        Process.send_after(self(), {:auth, 1}, ttl * 1000)
+      end
     else
       Logger.debug("token renewal disabled")
     end
@@ -216,17 +230,17 @@ defmodule Vaultag do
          "lease_duration" => lease_duration,
          "warnings" => warnings
        }) do
-    delay = lease_duration - config(:lease_renew_time_shift, 60)
-    # the threshold here is used to avoid sending too many requests to the server when the lease
-    # is about to reach its `max_ttl` which also means the leases with `ttl` less than
-    # the threshold cannot be renewed in this way
-    delay = Enum.max([delay, config(:lease_renew_threshold, 2)])
-    Logger.debug("lease ID #{inspect(lease_id)} renewal scheduled in #{delay}s")
+    shift = config(:lease_renewal_time_shift, 60)
+    delay = lease_duration - shift
 
-    unless is_nil(warnings),
-      do: Logger.warn("lease ID #{inspect(lease_id)} renewal: #{inspect(warnings)}")
+    if delay > shift do
+      Logger.debug("lease ID #{inspect(lease_id)} renewal scheduled in #{delay}s")
 
-    Process.send_after(self(), {:renew_lease, lease_id, 1}, delay * 1000)
+      unless is_nil(warnings),
+        do: Logger.warn("lease ID #{inspect(lease_id)} renewal: #{inspect(warnings)}")
+
+      Process.send_after(self(), {:renew_lease, lease_id, 1}, delay * 1000)
+    end
   end
 
   defp maybe_schedule_lease_renewal(_), do: :ok

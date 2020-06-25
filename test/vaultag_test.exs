@@ -3,8 +3,8 @@ defmodule VaultagTest do
 
   @moduletag :capture_log
 
-  setup do
-    start_supervised!(Vaultag, [])
+  setup tags do
+    unless tags[:skip_start], do: start_supervised!(Vaultag, [])
     :ok
   end
 
@@ -69,6 +69,15 @@ defmodule VaultagTest do
       assert {:ok, _} = Vaultag.delete(path)
       assert {:error, ["Key not found"]} == Vaultag.read(path)
     end
+  end
+
+  @tag :skip_start
+  test "returns the error when disabled" do
+    assert {:error, :disabled} = Vaultag.write("path", %{})
+    assert {:error, :disabled} = Vaultag.read("path")
+    assert {:error, :disabled} = Vaultag.list("path")
+    assert {:error, :disabled} = Vaultag.delete("path")
+    assert {:error, :disabled} = Vaultag.request(:get, "path")
   end
 
   test "renews the auth token" do

@@ -1,7 +1,7 @@
 defmodule Vaultag.Config do
   @otp_app :vaultag
 
-  def config(key, default) do
+  def config(key, default \\ nil) do
     Keyword.get(config(), key, default)
   end
 

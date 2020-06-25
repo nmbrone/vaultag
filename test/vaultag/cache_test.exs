@@ -90,4 +90,15 @@ defmodule Vaultag.CacheTest do
       assert :ets.info(t)[:size] == 1
     end
   end
+
+  describe "reset/1" do
+    test "resets the cache", %{table: t} do
+      Cache.put(t, "key1", %{"foo" => "bar"}, 10)
+      Cache.put(t, "key2", %{"foo" => "bar"}, 10)
+      Cache.put(t, "key3", %{"foo" => "bar"}, 10)
+      assert :ets.info(t)[:size] == 3
+      Cache.reset(t)
+      assert :ets.info(t)[:size] == 0
+    end
+  end
 end
