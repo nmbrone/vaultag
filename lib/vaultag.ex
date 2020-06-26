@@ -48,12 +48,12 @@ defmodule Vaultag do
     maybe_call({:request, method, path, opts})
   end
 
-  def get_client do
-    maybe_call(:get_client)
+  def get_vault do
+    maybe_call(:get_vault)
   end
 
-  def set_client(vault) do
-    maybe_call({:set_client, vault})
+  def set_vault(vault) do
+    maybe_call({:set_vault, vault})
   end
 
   @impl true
@@ -116,12 +116,12 @@ defmodule Vaultag do
   end
 
   @impl true
-  def handle_call(:get_client, _, state) do
+  def handle_call(:get_vault, _, state) do
     {:reply, state.vault, state}
   end
 
   @impl true
-  def handle_call({:set_client, vault}, _, state) do
+  def handle_call({:set_vault, vault}, _, state) do
     {:reply, vault, %{state | vault: vault}}
   end
 

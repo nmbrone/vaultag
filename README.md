@@ -2,7 +2,8 @@
 
 ![CI](https://github.com/nmbrone/vaultag/workflows/CI/badge.svg)
 
-A wrapper around [`libvault`](https://github.com/matthewoden/) which provides additional functionality:
+A GenServer which wraps [`libvault`](https://github.com/matthewoden/) library to provide additional 
+functionality:
 
 1. Management of token lifecycle (renew/re-auth/revoke).
 2. Caching for secrets.
@@ -10,40 +11,98 @@ A wrapper around [`libvault`](https://github.com/matthewoden/) which provides ad
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `vaultag` to your list of dependencies in `mix.exs`:
+The package can be installed by adding `vaultag` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:vaultag, "~> 0.1.0"}
+    {:vaultag, github: "nmbrone/vaultag", branch: "master"}
   ]
 end
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at [https://hexdocs.pm/vaultag](https://hexdocs.pm/vaultag).
+## Usage
 
-## Configuration
+Intended to be used as a part of your application supervision tree.
+
+```elixir
+defmodule MyApp.Application do
+  use Application
+
+  def start(_type, _args) do
+    children = [Vaultag]
+    opts = [strategy: :one_for_one, name: MyApp.Supervisor]
+    Supervisor.start_link(children, opts)
+  end
+end
+```
+
+#### Options
+
+- `:vault` (default `[]`) - a config for [`libvault`](https://github.com/matthewoden/libvault) 
+library. If omitted `Vaultag` is considered disabled;
+- `:cache_cleanup_interval` (default `3600`) -  the interval in seconds for cleaning up outdated 
+cache entries;
+- `:token_renew` (default `true`) - a boolean which indicates whether to use the token renewal 
+feature; 
+- `:token_renewal_time_shift` (default `60`) - seconds prior to the token's TTL end when the renewal 
+attempt should be made;
+- `:lease_renewal_time_shift` (default `60`) - seconds prior to the lease duration end when the 
+renewal attempt should be made;
 
 ```elixir
 # config/config.exs
-
-config :vaultag, :vault,
-  host: "http://my-vault-sever",
-  auth: Vault.Auth.Kubernetes,
-  engine: Vault.Engine.KVV1,
-  credentials: %{"role" => "my-role", "jwt" => "my-jwt"}
+config :vaultag,
+  cache_cleanup_interval: 3600,
+  token_renew: true,
+  token_renewal_time_shift: 60,
+  lease_renewal_time_shift: 60,
+  vault: [
+    host: "http://my-vault-sever",
+    auth: Vault.Auth.Kubernetes,
+    engine: Vault.Engine.KVV1,
+    credentials: %{"role" => "my-role", "jwt" => "my-jwt"}
+  ]
 ```
 
-## Local testing
+## API
 
-Before running the tests you will need to prepare local Vault dev server.
+Wrappers for `libvault` API:
+- `Vaultag.read(path, opts \\ [])` - same as `Vault.read/3`;
+- `Vaultag.list(path, opts \\ [])` - same as `Vault.list/3`;
+- `Vaultag.write(path, value, opts \\ [])` - same as `Vault.write/4`;
+- `Vaultag.delete(path, opts \\ [])` - same as `Vault.delete/3`;
+- `Vaultag.request(method, path, opts \\ [])` - same as `Vault.request/4`;
+
+Additional functions:
+- `Vaultag.get_vault()` - gets the cached `%Vault{}` structure;
+- `Vaultag.set_vault(vault)` - sets the specified `%Vault{}` structure for future usage;
+
+## Using with `libvault`
+
+```elixir
+Vaultag.get_vault()
+|> Vault.set_engine(Vault.Engine.KVV2)
+|> Vaultag.set_vault()
+
+
+Vault.request(Vaultag.get_vault(), :post, "path/to/call", [ body: %{ "foo" => "bar"}])
+```
+
+## Limitations
+
+Currently `:token_renewal_time_shift` must be less than half of the token TTL, which means that if 
+the TTL is set to 60 seconds then `:token_renewal_time_shift` has to be set to less than 30 seconds.
+
+The same limitation applies to `:lease_renewal_time_shift`.
+
+## Testing locally
+
+Before running the tests you will need to prepare local the Vault server.
 
 [Download](https://www.vaultproject.io/downloads) Vault binary and put it under `./bin/vault` path.
 
-Then run the following commands in terminal:
+Then run the following commands in a terminal:
 
 ```bash
 ./bin/vault server -dev -dev-root-token-id="root"
