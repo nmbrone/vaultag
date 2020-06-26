@@ -1,9 +1,9 @@
-# Vaultag
+# Vaultag - Vault Agent
 
 ![CI](https://github.com/nmbrone/vaultag/workflows/CI/badge.svg)
 
-A GenServer which wraps [`libvault`](https://github.com/matthewoden/) library to provide additional 
-functionality:
+A GenServer which wraps excellent [`libvault`](https://github.com/matthewoden/libvault) library 
+to provide the following additional functionality:
 
 1. Management of token lifecycle (renew/re-auth/revoke).
 2. Caching for secrets.
