@@ -68,13 +68,19 @@ config :vaultag,
 ## API
 
 Wrappers for `libvault` API:
+
 - `Vaultag.read(path, opts \\ [])` - same as `Vault.read/3`;
 - `Vaultag.list(path, opts \\ [])` - same as `Vault.list/3`;
 - `Vaultag.write(path, value, opts \\ [])` - same as `Vault.write/4`;
 - `Vaultag.delete(path, opts \\ [])` - same as `Vault.delete/3`;
 - `Vaultag.request(method, path, opts \\ [])` - same as `Vault.request/4`;
 
+All the functions above will return `{:error, :disabled}` in case Vaultag is not configured or not 
+started, which means they are safe to use in the environments where the vault server might be not 
+available.
+
 Additional functions:
+
 - `Vaultag.get_vault()` - gets the cached `%Vault{}` structure;
 - `Vaultag.set_vault(vault)` - sets the specified `%Vault{}` structure for future usage;
 
