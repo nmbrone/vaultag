@@ -45,13 +45,12 @@ library. If omitted `Vaultag` is considered disabled;
 cache entries;
 - `:token_renew` (default `true`) - a boolean which indicates whether to use the token renewal 
 feature; 
-- `:token_renewal_time_shift` (default `60`) - seconds prior to the token's TTL end when the renewal 
+- `:token_renewal_time_shift` (default `60`) - seconds prior to the token TTL end when the renewal 
 attempt should be made;
 - `:lease_renewal_time_shift` (default `60`) - seconds prior to the lease duration end when the 
 renewal attempt should be made;
 
 ```elixir
-# config/config.exs
 config :vaultag,
   cache_cleanup_interval: 3600,
   token_renew: true,
